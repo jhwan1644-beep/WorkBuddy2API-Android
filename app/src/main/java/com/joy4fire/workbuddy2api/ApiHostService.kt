@@ -307,6 +307,11 @@ class ApiHostService : Service() {
         // 提示词注入 + 第三方客户端指纹清洗（移植自 1.2.7 的 a.I2 / a.C0045h2.Y）。
         // 必须放在 proxy 最前面：所有协议适配器（anthropic/responses → chat）出来的
         // 都是同一份 requestBody，只在这里处理一次就不会漏，也不会重复注入。
+        //
+        // 注入前先检查降级是否已跨天过期：降级只应持续到触发当天，
+        // 过期而未复位会让自定义提示词永久失效（详见 restorePromptIfExpired 注释）。
+        runCatching { restorePromptIfExpired(this) }
+            .onFailure { Log.w(TAG, "restore prompt state failed", it) }
         runCatching { PromptInjection.apply(chatBody, NativeCore.settings(this)) }
             .onFailure { Log.w(TAG, "prompt pipeline failed; sending original body", it) }
         val model = chatBody.optString("model", "auto")
@@ -923,6 +928,30 @@ class ApiHostService : Service() {
          *      服务进程会被系统重启，存内存等于每次重启就悄悄"恢复"了。
          */
         private const val DEGRADE_PREF = "degraded_prompt_date"
+
+        /**
+         * 把降级状态复位（降级只应持续到触发当天）。
+         *
+         * 为什么必须有这个函数：
+         *   maybeDegradePrompt 会把 use_degraded_prompt 置为 true，语义是
+         *   「到当天午夜为止」。但此前【没有任何地方把它改回 false】，
+         *   于是只要历史上触发过一次内容拦截，降级提示词就会永久生效 ——
+         *   用户的自定义提示词从此再也注入不进去，表现为"提示词注入没效果"。
+         *
+         * 检查时机放在每次请求进入注入管线之前（见 proxy）：这样不需要依赖
+         * 服务重启或定时任务，跨天后发出的第一条请求就会立刻恢复自定义提示词。
+         */
+        private fun restorePromptIfExpired(ctx: Context) {
+            val prefs = ctx.getSharedPreferences("native", Context.MODE_PRIVATE)
+            val markedDate = prefs.getString(DEGRADE_PREF, null) ?: return
+            val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+                .format(java.util.Date())
+            if (markedDate == today) return
+            // 已跨天：清掉降级标记与开关
+            prefs.edit().remove(DEGRADE_PREF).apply()
+            NativeCore.saveSettings(ctx, JSONObject().put("use_degraded_prompt", false))
+            Log.i(TAG, "degraded prompt expired (marked $markedDate) -> restored custom prompt")
+        }
 
         private fun maybeDegradePrompt(ctx: Context, status: Int, raw: String) {
             if (status !in setOf(400, 403, 422)) return

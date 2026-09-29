@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -19,6 +20,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.joy4fire.workbuddy2api.AccountRegion
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.joy4fire.workbuddy2api.FormatKit
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.SmallTitle
@@ -43,9 +47,14 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 @Composable
 fun RecordsScreen(context: Context, app: AppState) {
     val records = app.usageRecords
+    val scope = rememberCoroutineScope()
     var pendingDelete by remember { mutableStateOf<Pair<Long, String>?>(null) }
     var showClearConfirm by remember { mutableStateOf(false) }
     var statusFilter by remember { mutableStateOf(0) } // 0=全部 1=成功 2=失败
+    // 单条内容弹窗：正文可能很长（单条上限各 32 万字符），故按需加载 + 弹窗内滚动。
+    var showDetail by remember { mutableStateOf(false) }
+    var detailTitle by remember { mutableStateOf("") }
+    var detailBody by remember { mutableStateOf("") }
 
     // 进入记录页自动拉取最新记录。
     // 此前只在 refreshAll() 与删除操作后加载，导致新产生的调用记录
@@ -132,6 +141,17 @@ fun RecordsScreen(context: Context, app: AppState) {
                 UsageRecordCard(
                     item = item,
                     accountLabel = nameByUid[item.optString("account_uid")],
+                    onOpenDetail = {
+                        // 内容按需加载：列表走 light 查询不含正文，点开时再取单条完整记录。
+                        detailTitle = "#${item.optLong("id")} · ${item.optString("model", "auto")}"
+                        detailBody = "读取中…"
+                        showDetail = true
+                        scope.launch {
+                            detailBody = withContext(Dispatchers.IO) {
+                                app.loadUsageDetail(item.optLong("id"))
+                            }
+                        }
+                    },
                     onDelete = {
                         pendingDelete = item.optLong("id") to item.optString("model", "auto")
                     }
@@ -160,6 +180,21 @@ fun RecordsScreen(context: Context, app: AppState) {
         onConfirm = { app.clearUsage(app.usageTotal); showClearConfirm = false },
         onDismiss = { showClearConfirm = false }
     )
+
+    // 单条内容弹窗：展示【注入后】的完整输入（可在其中核对 system 提示词是否已生效）。
+    if (showDetail) {
+        PcDetailDialog(
+            show = true,
+            title = detailTitle,
+            body = detailBody,
+            copyLabel = "复制全部",
+            onCopy = {
+                copyToClipboard(context, detailBody)
+                app.showMessage("已复制该条内容")
+            },
+            onDismiss = { showDetail = false }
+        )
+    }
 }
 
 /** 单条记录卡：状态、模型、扣费账号、应用、Tokens、积分、延迟、错误。 */
@@ -167,6 +202,7 @@ fun RecordsScreen(context: Context, app: AppState) {
 private fun UsageRecordCard(
     item: org.json.JSONObject,
     accountLabel: String?,
+    onOpenDetail: () -> Unit,
     onDelete: () -> Unit
 ) {
     val id = item.optLong("id")
@@ -221,8 +257,13 @@ private fun UsageRecordCard(
                 Text(item.optString("error"), style = MiuixTheme.textStyles.body2,
                     color = MiuixTheme.colorScheme.error)
             }
-            Spacer(Modifier.height(PcTokens.SpaceS))
-            TextButton(text = "删除这条", onClick = onDelete, modifier = Modifier.fillMaxWidth())
+            Spacer(Modifier.height(PcTokens.SpaceM))
+            PcActionGrid(
+                actions = listOf(
+                    PcAction("查看内容", primary = true) { onOpenDetail() },
+                    PcAction("删除这条") { onDelete() }
+                )
+            )
         }
     }
 }

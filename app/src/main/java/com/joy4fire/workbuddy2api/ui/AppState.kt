@@ -353,6 +353,32 @@ class AppState(private val context: Context) {
         if (NativeCore.deleteUsage(context, id)) "已删除记录 #$id" else "这条记录已不存在"
     }
 
+    /**
+     * 读取单条记录的完整内容（含注入后的提示词、模型输出、思考链）。
+     *
+     * 为什么按需读取而不是直接放进列表：
+     *   usageRecent 默认走 light 模式，只取元信息列 —— 这是有意设计，
+     *   因为 input/output/reasoning 三个正文字段合计可能很大（单条上限各 32 万字符），
+     *   一次拉 100 条会让列表查询与内存暴涨。因此列表不带正文，
+     *   点开某条时再用 getUsage(id) 精确取一条。
+     *
+     * @return 内容文本；读取失败返回错误说明（不抛异常，便于直接展示在弹窗里）
+     */
+    fun loadUsageDetail(id: Long): String = runCatching {
+        val record = NativeCore.getUsage(context, id)
+            ?: return@runCatching "记录 #$id 已不存在"
+        buildString {
+            append("【输入（含注入后的 system 提示词）】\n")
+            append(record.optString("input_content").ifBlank { "（空）" })
+            append("\n\n【输出】\n")
+            append(record.optString("output_content").ifBlank { "（空）" })
+            val reasoning = record.optString("reasoning_content")
+            if (reasoning.isNotBlank()) {
+                append("\n\n【思考链】\n").append(reasoning)
+            }
+        }
+    }.getOrElse { "读取失败：${it.message ?: it.javaClass.simpleName}" }
+
     fun clearUsage(total: Int) = task("清空记录") {
         val removed = NativeCore.clearUsage(context)
         loadUsage()

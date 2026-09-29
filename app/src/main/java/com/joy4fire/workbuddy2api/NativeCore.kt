@@ -836,6 +836,14 @@ object NativeCore {
     fun logUsage(context: Context, record: JSONObject): Long = store(context).logUsage(record)
     fun usageSummary(context: Context): JSONObject = store(context).usageSummary()
     fun usageRecent(context: Context, page: Int = 1, pageSize: Int = 20, protocol: String? = null, model: String? = null, appName: String? = null, status: String? = null, light: Boolean = true): JSONObject = store(context).usageRecent(page, pageSize, protocol, model, appName, status, light)
+
+    /**
+     * 读取单条记录的完整内容（含 input_content / output_content / reasoning_content）。
+     *
+     * 与 usageRecent 的 light 模式配套：列表只取元信息列，正文按需单条查询，
+     * 避免一次拉 100 条正文导致内存与查询开销暴涨。
+     */
+    fun getUsage(context: Context, id: Long): JSONObject? = store(context).getUsage(id)
     fun usageDetail(context: Context, id: Long): JSONObject? = store(context).getUsage(id)
     fun usageFilters(context: Context): JSONObject = store(context).usageFilters()
     fun usageTimeseries(context: Context, granularity: String = "hour", points: Int = 24, model: String? = null): JSONArray = store(context).usageTimeseries(granularity, points, model)
