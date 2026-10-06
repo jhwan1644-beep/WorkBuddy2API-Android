@@ -410,9 +410,15 @@ object NativeCore {
 
     /** 把上游/内置目录（product.json 结构）转换成对外暴露的 OpenAI 风格模型条目，并统一处理 auto 重命名与倍率。 */
     private fun catalogToModels(data: JSONObject, region: AccountRegion, payload: JSONObject): JSONArray {
-        // 国际版实测可用模型白名单（2026-09-13 真实账号逐个调用验证）。
-        // 只有这些模型对当前账号/地域实际可用，其余 13 个均返回 11102 service info not found。
-        // 使用「对外暴露名」：international 的 default-model -> auto，其余保持原样。
+        // 【不要再用白名单裁剪目录】——这里曾经是一张「2026-09-13 实测可用」的硬编码白名单，
+        // 命中才保留、其余 `continue` 丢掉。它带来两个方向的错误，且随时间越来越严重：
+        //   1) 假阴性（模型变少，用户看到的就是「模型不全」）：名单是编译期固定的，上游新放的模型
+        //      （gpt-6-sol / gpt-6-luna / grok-4.7 / gemini-3.8-flash 等）不在名单里，即使账号实际
+        //      调用成功（真机实测均返回 200）也永远不出现在 /v1/models，除非重新编译发版；
+        //   2) 假阳性（名单里留着已下线的）：如 gpt-5.1-codex 现已返回 11102，却仍被当作可用暴露。
+        // 现在改为**以活目录为准全量暴露**：上游目录里存在且未 disabled 的模型一律返回，能不能调通
+        // 由上游判定，错误照旧如实透传给客户端；本名单降级为「仅作 verified 标记」的提示信息。
+        // 「对外暴露名」继续保留：international 的 default-model -> auto，其余原样。
         val VERIFIED_AVAILABLE: Set<String> = setOf(
             "auto", "fast-model", "balanced-model", "primary-model", "deep-model",
             "gpt-5.5", "gpt-5.4", "gpt-5.3-codex", "gemini-3.1-pro", "kimi-k2.5",
@@ -453,9 +459,12 @@ object NativeCore {
             // 国际版上游同时接受 default-model 与 auto（实测 /v2/chat/completions 两者均返回 200），统一暴露
             // 成 auto：既与国内版调用习惯一致，又不会因为改名丢掉官方 credits 倍率。
             val id = if (region == AccountRegion.INTERNATIONAL && upstreamId == "default-model") "auto" else upstreamId
-            // 仅暴露实测可用的模型（international 使用对外名，domestic 使用原版上游名）
-            if (region == AccountRegion.INTERNATIONAL && id !in VERIFIED_AVAILABLE) continue
+            // 不再按名单丢弃模型：目录里有的全部暴露（见上面注释）。白名单只用来告诉客户端
+            // 「这个模型的可用性曾经过实测」。标记是增量的：只有「在名单里且确实在目录里」才为 true，
+            // 目录里新出现、尚未实测的模型不再被隐藏，只是没有该标记。
+            val verified = VERIFIED_AVAILABLE.contains(upstreamId) || VERIFIED_AVAILABLE.contains(id)
             val entry = modelEntry(model, id)
+            entry.put("verified", verified)
             if (recommended.isNotEmpty()) entry.put("cli_recommended", recommended.contains(upstreamId))
             if (id != upstreamId) entry.put("upstream_model_id", upstreamId)
             if (region == AccountRegion.INTERNATIONAL && catalogSource.isNotBlank()) {

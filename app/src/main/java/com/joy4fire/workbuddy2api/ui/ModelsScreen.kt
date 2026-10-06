@@ -195,6 +195,9 @@ private fun ModelCard(model: org.json.JSONObject) {
                 if (model.optBoolean("supports_images")) add("图像输入")
                 val context = model.optLong("context_length")
                 if (context > 0) add("上下文 ${compactTokens(context)}")
+                // 上游目录里存在、但本机账号尚未实测过的模型：不隐藏（隐藏正是「模型不全」的旧病），
+                // 但明确标出来，避免用户选中后撞上 11102 却不知道原因。
+                if (model.has("verified") && !model.optBoolean("verified", true)) add("未经本机实测")
             }
             if (capabilities.isNotEmpty()) {
                 Spacer(Modifier.height(PcTokens.SpaceS))
